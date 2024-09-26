@@ -77,10 +77,10 @@ def tiled_scale_multidim(
     samples, function, tile=(64, 64), overlap=8, upscale_amount=4, out_channels=3, output_device="cpu", pbar=None
 ):
     dims = len(tile)
-    print(f"samples dtype:{samples.dtype}")
     output = torch.empty(
         [samples.shape[0], out_channels] + list(map(lambda a: round(a * upscale_amount), samples.shape[2:])),
         device=output_device,
+        dtype=samples.dtype # Maintain original data type
     )
 
     for b in range(samples.shape[0]):
@@ -88,10 +88,12 @@ def tiled_scale_multidim(
         out = torch.zeros(
             [s.shape[0], out_channels] + list(map(lambda a: round(a * upscale_amount), s.shape[2:])),
             device=output_device,
+            dtype=samples.dtype # Maintain original data type
         )
         out_div = torch.zeros(
             [s.shape[0], out_channels] + list(map(lambda a: round(a * upscale_amount), s.shape[2:])),
             device=output_device,
+            dtype=samples.dtype # Maintain original data type
         )
 
         for it in itertools.product(*map(lambda a: range(0, a[0], a[1] - overlap), zip(s.shape[2:], tile))):
@@ -122,6 +124,7 @@ def tiled_scale_multidim(
 
             o += ps * mask
             o_d += mask
+
 
             if pbar is not None:
                 pbar.update(1)
@@ -154,6 +157,7 @@ def load_sd_upscale(ckpt, inf_device):
     return out
 
 
+
 def upscale(upscale_model, tensor: torch.Tensor, inf_device, output_device="cpu") -> torch.Tensor:
     memory_required = module_size(upscale_model.model)
     memory_required += (
@@ -171,28 +175,32 @@ def upscale(upscale_model, tensor: torch.Tensor, inf_device, output_device="cpu"
     )
 
     pbar = ProgressBar(steps, desc="Tiling and Upscaling")
+    tensor = tensor.to(inf_device) # Ensure tensor is on the same device as upscale_model
 
     s = tiled_scale(
-        samples=tensor.to(torch.float16),
+        samples=tensor.to(torch.float16),  # Cast to float16 after moving to device
         function=lambda a: upscale_model(a),
         tile_x=tile,
         tile_y=tile,
         overlap=overlap,
         upscale_amount=upscale_model.scale,
         pbar=pbar,
+        output_device=inf_device # Make the output of tiled_scale be on the same device
     )
 
-    upscale_model.to(output_device)
-    return s
+    return s.to(output_device) # Move to output device at the very end
 
 
 def upscale_batch_and_concatenate(upscale_model, latents, inf_device, output_device="cpu") -> torch.Tensor:
     upscaled_latents = []
     for i in range(latents.size(0)):
         latent = latents[i]
-        upscaled_latent = upscale(upscale_model, latent, inf_device, output_device)
+        latent = latent.to(inf_device)  # Ensure latent is on the same device as upscale_model
+        upscaled_latent = upscale(upscale_model, latent, inf_device, output_device=inf_device) # Keep intermediate results on inf_device
         upscaled_latents.append(upscaled_latent)
-    return torch.stack(upscaled_latents)
+    return torch.stack(upscaled_latents).to(output_device) # Move to the output device only once after stacking
+
+
 
 
 def save_video(tensor: Union[List[np.ndarray], List[PIL.Image.Image]], fps: int = 8, output_path: str = None):
@@ -215,8 +223,6 @@ class ProgressBar:
             value = self.total
         self.current = value
         if self.b_unit is not None:
+            self.b_unit.n = self.current
             self.b_unit.set_description("ProgressBar context index: {}".format(self.current))
             self.b_unit.refresh()
-
-            # 更新进度
-            self.b_unit.update(self.current)

@@ -351,10 +351,12 @@ def generate(
         quantization_type=quantization_type,
         progress=progress,
     )
-    if scale_status:
-        latents = utils.upscale_batch_and_concatenate(upscale_model, latents, device)
+
     if rife_status:
         latents = rife_inference_with_latents(frame_interpolation_model, latents)
+    if scale_status:
+        latents = utils.upscale_batch_and_concatenate(upscale_model, latents, device)
+
 
     batch_size = latents.shape[0]
     batch_video_frames = []
@@ -381,14 +383,14 @@ def generate(
 
 with gr.Blocks() as demo:
     gr.Markdown("""
-           <div style="text-align: center; font-size: 20px; font-weight: bold; margin-bottom: 20px;">
+           <div style="text-align: center; font-size: 22px; font-weight: bold; margin-bottom: 10px;">
                CogVideoX-5B by SECourses V1
-                              <a href="https://www.patreon.com/SECourses">www.patreon.com/SECourses</a>
-               <br>
-               Fixed and Works: Frame Interpolation (8fps -> 16fps) + Proper automatic file saving
+                              <a href="https://www.patreon.com/posts/112836177">www.patreon.com/posts/112836177</a>
            </div>
-           <div style="text-align: center;">
-
+           <div style="text-align: center; font-size: 18px; font-weight: bold; margin-bottom: 0px;">
+               - The followings fixed and perfectly works:<br>
+               * Works on Windows, Runpod & Massed Compute | Super-Resolution (720 × 480 -> 2880 × 1920)<br>
+               * Frame Interpolation (8fps -> 16fps) | Properly saving all generations into outputs folder
            </div>
            """)
     with gr.Row():
@@ -429,7 +431,14 @@ with gr.Blocks() as demo:
             open_outputs_button = gr.Button("Open Results Folder")
             open_outputs_button.click(fn=lambda: open_folder("outputs"))
             gr.Markdown(
-                        "Currently on Windows we have to use CPU Offloading due to shameless OpenAI who takes 10s of billions from Microsoft not giving any support to Windows - uses less than 5 GB VRAM<br><br>I am trying to find a solution for this but because of this, it will be super slow<br><br>On Linux or WSL you can extra install torchao and use int8<br><br>Because of the Lazy coding of CogVideo team, FP8 only works on H100 and above GPUs :/ I am still searching a solution for this as well<br><br>If your GPU VRAM is below 16 GB, enable Use Slicing and Use Tiling as well (they are used after all steps done)"
+                        """Currently on Windows we have to use CPU Offloading due to shameless OpenAI who takes 10s of billions from Microsoft not giving any support to Windows - uses less than 5 GB VRAM<br><br>I am trying to find a solution for this but because of this, it will be super slow<br><br>On Linux or WSL you can extra install torchao and use int8<br><br>Because of the Lazy coding of CogVideo team, FP8 only works on H100 and above GPUs :/ I am still searching a solution for this as well<br><br>If your GPU VRAM is below 16 GB, enable Use Slicing and Use Tiling as well (they are used after all steps done)<br><br>Without CPU offloading and without using FP8 or Int8 it uses 26 GB VRAM thus we have to use CPU offloading
+                        <br>   <br>
+                        You can use here to generate caption : https://poe.com/Claude-3.5-Sonnet  
+                        <br>Upload image and use below prompt   <br>
+                        <br>  
+                        analyze the attached image and write me a detailed video flow description to animate it in a image to video animation generative ai model<br>
+                        e.g. like<br>
+                        Fireworks display over night city. The video is of high quality, and the view is very clear. High quality, masterpiece, best quality, highres, ultra-detailed, fantastic."""
                     )
             with gr.Row():
                 download_video_button = gr.File(label="📥 Download Video", visible=False)

@@ -434,7 +434,7 @@ with gr.Blocks() as demo:
                         """Currently on Windows we have to use CPU Offloading due to shameless OpenAI who takes 10s of billions from Microsoft not giving any support to Windows - uses less than 5 GB VRAM<br><br>I am trying to find a solution for this but because of this, it will be super slow<br><br>On Linux or WSL you can extra install torchao and use int8<br><br>Because of the Lazy coding of CogVideo team, FP8 only works on H100 and above GPUs :/ I am still searching a solution for this as well<br><br>If your GPU VRAM is below 16 GB, enable Use Slicing and Use Tiling as well (they are used after all steps done)<br><br>Without CPU offloading and without using FP8 or Int8 it uses 26 GB VRAM thus we have to use CPU offloading
                         <br>   <br>
                         You can use here to generate caption : https://poe.com/Claude-3.5-Sonnet  
-                        <br>Upload image and use below prompt   <br>
+                        <br>Upload image and use below prompt
                         <br>  
                         analyze the attached image and write me a detailed video flow description to animate it in a image to video animation generative ai model<br>
                         e.g. like<br>

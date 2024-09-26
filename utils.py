@@ -195,12 +195,13 @@ def upscale_batch_and_concatenate(upscale_model, latents, inf_device, output_dev
     return torch.stack(upscaled_latents)
 
 
-def save_video(tensor: Union[List[np.ndarray], List[PIL.Image.Image]], fps: int = 8):
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    video_path = f"./output/{timestamp}.mp4"
-    os.makedirs(os.path.dirname(video_path), exist_ok=True)
-    export_to_video(tensor, video_path, fps=fps)
-    return video_path
+def save_video(tensor: Union[List[np.ndarray], List[PIL.Image.Image]], fps: int = 8, output_path: str = None):
+    if output_path is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = f"./output/{timestamp}.mp4"
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    export_to_video(tensor, output_path, fps=fps)
+    return output_path
 
 
 class ProgressBar:

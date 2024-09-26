@@ -248,7 +248,7 @@ def infer(
             guidance_scale=guidance_scale,
             generator=torch.Generator(device="cpu").manual_seed(seed),
         ).frames
-        pipe_image.to("cpu")
+        #pipe_image.to("cpu")
         del pipe_image
         gc.collect()
         torch.cuda.empty_cache()
@@ -417,7 +417,7 @@ with gr.Blocks() as demo:
             open_outputs_button = gr.Button("Open Results Folder")
             open_outputs_button.click(fn=lambda: open_folder("outputs"))
             gr.Markdown(
-                        "Currently on Windows we have to use CPU Offloading due to shameless OpenAI who takes 10s of billions from Microsoft not giving any support to Windows - uses less than 5 GB VRAM<br><br>I am trying to find a solution for this but because of this, it will be super slow<br><br>On Linux or WSL you can extra install torchao and use int8<br><br>Because of the Lazy coding of CogVideo team, FP8 only works on H100 and above GPUs :/ I am still searching a solution for this as well"
+                        "Currently on Windows we have to use CPU Offloading due to shameless OpenAI who takes 10s of billions from Microsoft not giving any support to Windows - uses less than 5 GB VRAM<br><br>I am trying to find a solution for this but because of this, it will be super slow<br><br>On Linux or WSL you can extra install torchao and use int8<br><br>Because of the Lazy coding of CogVideo team, FP8 only works on H100 and above GPUs :/ I am still searching a solution for this as well<br>If your GPU VRAM is below 16 GB, enable Use Slicing and Use Tiling as well (they are used after all steps done)"
                     )
             with gr.Row():
                 download_video_button = gr.File(label="📥 Download Video", visible=False)

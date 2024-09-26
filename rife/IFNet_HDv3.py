@@ -5,7 +5,6 @@ from .warplayer import warp
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
 def conv(in_planes, out_planes, kernel_size=3, stride=1, padding=1, dilation=1):
     return nn.Sequential(
         nn.Conv2d(
@@ -16,10 +15,9 @@ def conv(in_planes, out_planes, kernel_size=3, stride=1, padding=1, dilation=1):
             padding=padding,
             dilation=dilation,
             bias=True,
-        ),
-        nn.PReLU(out_planes),
+        ).to(dtype=torch.bfloat16),
+        nn.PReLU(out_planes).to(dtype=torch.bfloat16),
     )
-
 
 def conv_bn(in_planes, out_planes, kernel_size=3, stride=1, padding=1, dilation=1):
     return nn.Sequential(
@@ -31,11 +29,10 @@ def conv_bn(in_planes, out_planes, kernel_size=3, stride=1, padding=1, dilation=
             padding=padding,
             dilation=dilation,
             bias=False,
-        ),
-        nn.BatchNorm2d(out_planes),
-        nn.PReLU(out_planes),
+        ).to(dtype=torch.bfloat16),
+        nn.BatchNorm2d(out_planes).to(dtype=torch.bfloat16),
+        nn.PReLU(out_planes).to(dtype=torch.bfloat16),
     )
-
 
 class IFBlock(nn.Module):
     def __init__(self, in_planes, c=64):
@@ -49,17 +46,20 @@ class IFBlock(nn.Module):
         self.convblock2 = nn.Sequential(conv(c, c), conv(c, c))
         self.convblock3 = nn.Sequential(conv(c, c), conv(c, c))
         self.conv1 = nn.Sequential(
-            nn.ConvTranspose2d(c, c // 2, 4, 2, 1),
-            nn.PReLU(c // 2),
-            nn.ConvTranspose2d(c // 2, 4, 4, 2, 1),
+            nn.ConvTranspose2d(c, c // 2, 4, 2, 1).to(dtype=torch.bfloat16),
+            nn.PReLU(c // 2).to(dtype=torch.bfloat16),
+            nn.ConvTranspose2d(c // 2, 4, 4, 2, 1).to(dtype=torch.bfloat16),
         )
         self.conv2 = nn.Sequential(
-            nn.ConvTranspose2d(c, c // 2, 4, 2, 1),
-            nn.PReLU(c // 2),
-            nn.ConvTranspose2d(c // 2, 1, 4, 2, 1),
+            nn.ConvTranspose2d(c, c // 2, 4, 2, 1).to(dtype=torch.bfloat16),
+            nn.PReLU(c // 2).to(dtype=torch.bfloat16),
+            nn.ConvTranspose2d(c // 2, 1, 4, 2, 1).to(dtype=torch.bfloat16),
         )
 
     def forward(self, x, flow, scale=1):
+        x = x.to(dtype=torch.bfloat16)
+        flow = flow.to(dtype=torch.bfloat16)
+        
         x = F.interpolate(
             x, scale_factor=1.0 / scale, mode="bilinear", align_corners=False, recompute_scale_factor=False
         )
@@ -86,7 +86,6 @@ class IFBlock(nn.Module):
         )
         return flow, mask
 
-
 class IFNet(nn.Module):
     def __init__(self):
         super(IFNet, self).__init__()
@@ -94,22 +93,25 @@ class IFNet(nn.Module):
         self.block1 = IFBlock(7 + 4, c=90)
         self.block2 = IFBlock(7 + 4, c=90)
         self.block_tea = IFBlock(10 + 4, c=90)
-        # self.contextnet = Contextnet()
-        # self.unet = Unet()
 
     def forward(self, x, scale_list=[4, 2, 1], training=False):
-        if training == False:
+        x = x.to(dtype=torch.bfloat16)
+        
+        if not training:
             channel = x.shape[1] // 2
             img0 = x[:, :channel]
             img1 = x[:, channel:]
+        else:
+            img0, img1 = x[:, :3], x[:, 3:6]
+        
         flow_list = []
         merged = []
         mask_list = []
         warped_img0 = img0
         warped_img1 = img1
-        flow = (x[:, :4]).detach() * 0
-        mask = (x[:, :1]).detach() * 0
-        loss_cons = 0
+        flow = torch.zeros(x.size(0), 4, x.size(2), x.size(3), device=x.device, dtype=torch.bfloat16)
+        mask = torch.zeros(x.size(0), 1, x.size(2), x.size(3), device=x.device, dtype=torch.bfloat16)
+        
         block = [self.block0, self.block1, self.block2]
         for i in range(3):
             f0, m0 = block[i](torch.cat((warped_img0[:, :3], warped_img1[:, :3], mask), 1), flow, scale=scale_list[i])
@@ -125,14 +127,9 @@ class IFNet(nn.Module):
             warped_img0 = warp(img0, flow[:, :2])
             warped_img1 = warp(img1, flow[:, 2:4])
             merged.append((warped_img0, warped_img1))
-        """
-        c0 = self.contextnet(img0, flow[:, :2])
-        c1 = self.contextnet(img1, flow[:, 2:4])
-        tmp = self.unet(img0, img1, warped_img0, warped_img1, mask, flow, c0, c1)
-        res = tmp[:, 1:4] * 2 - 1
-        """
+
         for i in range(3):
             mask_list[i] = torch.sigmoid(mask_list[i])
             merged[i] = merged[i][0] * mask_list[i] + merged[i][1] * (1 - mask_list[i])
-            # merged[i] = torch.clamp(merged[i] + res, 0, 1)
+
         return flow_list, mask_list[2], merged

@@ -15,10 +15,11 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def pad_image(img, scale):
     _, _, h, w = img.shape
-    tmp = max(32, int(32 / scale))
-    ph = ((h - 1) // tmp + 1) * tmp
-    pw = ((w - 1) // tmp + 1) * tmp
-    padding = (0, 0, pw - w, ph - h)
+    # Calculate padding based on RIFE's expected multiples
+    pad_h = (16 - (h % 16)) % 16
+    pad_w = (16 - (w % 16)) % 16
+
+    padding = (pad_w//2, pad_w - pad_w//2, pad_h//2, pad_h-pad_h//2) # Distribute padding evenly
     return F.pad(img, padding)
 
 

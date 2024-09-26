@@ -214,8 +214,8 @@ def infer(
             guidance_scale=guidance_scale,
             generator=torch.Generator(device="cpu").manual_seed(seed),
         ).frames
-        pipe_video.to("cpu")
-        del pipe_video
+        #pipe_video.to("cpu")
+        #del pipe_video
         gc.collect()
         torch.cuda.empty_cache()
     elif image_input is not None:
@@ -249,7 +249,7 @@ def infer(
             generator=torch.Generator(device="cpu").manual_seed(seed),
         ).frames
         #pipe_image.to("cpu")
-        del pipe_image
+        #del pipe_image
         gc.collect()
         torch.cuda.empty_cache()
     else:
@@ -275,7 +275,7 @@ def infer(
             guidance_scale=guidance_scale,
             generator=torch.Generator(device="cpu").manual_seed(seed),
         ).frames
-        pipe.to("cpu")
+        #pipe.to("cpu")
         gc.collect()
     return (video_pt, seed)
 
@@ -305,12 +305,21 @@ def delete_old_files():
 threading.Thread(target=delete_old_files, daemon=True).start()
 
 def get_unique_filename(base_path, extension):
-    counter = 1
-    new_path = base_path
-    while os.path.exists(new_path):
-        new_path = f"{base_path[:-len(extension)]}_{counter:04d}{extension}"
+    directory = os.path.dirname(base_path)
+    filename = os.path.basename(base_path)
+    name, ext = os.path.splitext(filename)
+    
+    counter = 0
+    while True:
+        if counter == 0:
+            new_filename = f"{name}{extension}"
+        else:
+            new_filename = f"{name}_{counter:04d}{extension}"
+        
+        new_path = os.path.join(directory, new_filename)
+        if not os.path.exists(new_path):
+            return new_path
         counter += 1
-    return new_path
 
 def generate(
     prompt,
@@ -372,11 +381,14 @@ def generate(
 
 with gr.Blocks() as demo:
     gr.Markdown("""
-           <div style="text-align: center; font-size: 32px; font-weight: bold; margin-bottom: 20px;">
+           <div style="text-align: center; font-size: 20px; font-weight: bold; margin-bottom: 20px;">
                CogVideoX-5B by SECourses V1
+                              <a href="https://www.patreon.com/SECourses">www.patreon.com/SECourses</a>
+               <br>
+               Fixed and Works: Frame Interpolation (8fps -> 16fps) + Proper automatic file saving
            </div>
            <div style="text-align: center;">
-               <a href="https://www.patreon.com/SECourses">www.patreon.com/SECourses</a>
+
            </div>
            """)
     with gr.Row():

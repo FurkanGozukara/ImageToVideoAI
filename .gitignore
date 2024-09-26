@@ -1,0 +1,8 @@
+.venv
+.idea
+.vs
+gradio_tmp
+model_real_esran
+model_rife
+outputs
+venv

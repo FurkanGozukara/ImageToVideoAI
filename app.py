@@ -274,13 +274,22 @@ def infer(
         gc.collect()
     return (video_pt, seed)
 
-def convert_to_gif(video_path):
-    clip = mp.VideoFileClip(video_path)
-    clip = clip.set_fps(8)
-    clip = clip.resize(height=240)
-    gif_path = video_path.replace(".mp4", ".gif")
-    clip.write_gif(gif_path, fps=8)
-    return gif_path
+def get_unique_filename(base_path, extension):
+    directory = os.path.dirname(base_path)
+    filename = os.path.basename(base_path)
+    name, ext = os.path.splitext(filename)
+    
+    counter = 0
+    while True:
+        if counter == 0:
+            new_filename = f"{name}{extension}"
+        else:
+            new_filename = f"{name}_{counter:04d}{extension}"
+        
+        new_path = os.path.join(directory, new_filename)
+        if not os.path.exists(new_path):
+            return new_path
+        counter += 1
 
 def delete_old_files():
     while True:
@@ -298,23 +307,6 @@ def delete_old_files():
         time.sleep(600)
 
 threading.Thread(target=delete_old_files, daemon=True).start()
-
-def get_unique_filename(base_path, extension):
-    directory = os.path.dirname(base_path)
-    filename = os.path.basename(base_path)
-    name, ext = os.path.splitext(filename)
-    
-    counter = 0
-    while True:
-        if counter == 0:
-            new_filename = f"{name}{extension}"
-        else:
-            new_filename = f"{name}_{counter:04d}{extension}"
-        
-        new_path = os.path.join(directory, new_filename)
-        if not os.path.exists(new_path):
-            return new_path
-        counter += 1
 
 def generate(
     prompt,
@@ -369,11 +361,15 @@ def generate(
             batch_video_frames.append(image_pil)
 
         base_filename = "output_" if video_input is None else os.path.splitext(os.path.basename(video_input))[0]
-        video_path = get_unique_filename(os.path.join("outputs", f"{base_filename}_gen{i+1}.mp4"), ".mp4")
+        video_path = get_unique_filename(os.path.join("outputs", f"{base_filename}.mp4"), ".mp4")
         
         utils.save_video(batch_video_frames[0], fps=math.ceil((len(batch_video_frames[0]) - 1) / 6), output_path=video_path)
         
-        gif_path = convert_to_gif(video_path)
+        gif_path = get_unique_filename(video_path.replace(".mp4", ".gif"), ".gif")
+        clip = mp.VideoFileClip(video_path)
+        clip = clip.set_fps(8)
+        clip = clip.resize(height=240)
+        clip.write_gif(gif_path, fps=8)
         
         all_video_paths.append(video_path)
         all_gif_paths.append(gif_path)
@@ -395,9 +391,10 @@ with gr.Blocks() as demo:
            <div style="text-align: center; font-size: 18px; font-weight: bold; margin-bottom: 0px;">
                - The followings fixed and perfectly works:<br>
                * Works on Windows, Runpod & Massed Compute | Super-Resolution (720 × 480 -> 2880 × 1920)<br>
-               * Frame Interpolation (8fps -> 16fps) | Properly saving all generations into outputs folder
+               * Properly saving all generations into outputs folder
            </div>
            """)
+    #Frame Interpolation (8fps -> 16fps) | 
     with gr.Row():
         with gr.Column():
             with gr.Accordion("I2V: Image Input (cannot be used simultaneously with video input)", open=True):
@@ -426,7 +423,7 @@ with gr.Blocks() as demo:
                     with gr.Row():
                         quantization_type = gr.Radio(["none", "int8", "fp8"], label="Quantization Type", value="none")
                     with gr.Row():
-                        num_generations = gr.Slider(1, 10, value=1, step=1, label="Number of Generations")
+                        num_generations = gr.Slider(1, 999, value=1, step=1, label="Number of Generations")
                     gr.Markdown(
                         "✨In this demo, we use [RIFE](https://github.com/hzwer/ECCV2022-RIFE) for frame interpolation and [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) for upscaling(Super-Resolution).<br>&nbsp;&nbsp;&nbsp;&nbsp;The entire process is based on open-source solutions."
                     )
@@ -440,6 +437,10 @@ with gr.Blocks() as demo:
             gr.Markdown(
                         """Currently on Windows we have to use CPU Offloading due to shameless OpenAI who takes 10s of billions from Microsoft not giving any support to Windows<br><br>I am trying to find a solution for this but because of this, it will be super slow<br><br>On Linux or WSL you can extra install torchao and use int8<br><br>Because of the Lazy coding of CogVideo team, FP8 only works on H100 and above GPUs :/ I am still searching a solution for this as well<br><br>If your GPU VRAM is below 16 GB, enable Use Slicing and Use Tiling as well (they are used after all steps done)<br><br>Without CPU offloading and without using FP8 or Int8 it uses 26 GB VRAM thus we have to use CPU offloading
                         <br>   <br>
+                        Text to video, Video to Video not working at all yet I opened an issue for this
+                        <br><br>
+                        Frame Interpolation (8fps -> 16fps) not working properly yet I opened an issue for this
+                        <br><br>
                         You can use here to generate caption : https://poe.com/Claude-3.5-Sonnet  
                         <br>Upload image and use below prompt
                         <br>  

@@ -19,3 +19,5 @@ moviepy>=1.0.3
 pillow==9.5.0
 xformers==0.0.28.post1
 #torchao
+optimum-quanto
+bitsandbytes

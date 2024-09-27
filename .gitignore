@@ -6,3 +6,5 @@ model_real_esran
 model_rife
 outputs
 venv
+__pycache__/*
+pipelines/__pycache__/*

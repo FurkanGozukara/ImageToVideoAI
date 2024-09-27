@@ -11,10 +11,10 @@ import imageio_ffmpeg
 import gradio as gr
 import torch
 from PIL import Image
+from pipelines.cogvideox_transformer_3d import CogVideoXTransformer3DModel
 from pipelines.pipeline_cogvideox import (
     CogVideoXPipeline,
-    CogVideoXDPMScheduler,    
-    CogVideoXTransformer3DModel,
+    CogVideoXDPMScheduler
 )
 from pipelines.pipeline_cogvideox_image2video import CogVideoXImageToVideoPipeline
 from pipelines.pipeline_cogvideox_video2video import CogVideoXVideoToVideoPipeline
@@ -25,7 +25,7 @@ from datetime import datetime, timedelta
 from diffusers.image_processor import VaeImageProcessor
 from openai import OpenAI
 import moviepy.editor as mp
-from pipelines.pipeline_common import torch_gc
+from pipelines.pipeline_common import quantize_4bit, torch_gc
 import utils
 from rife_model import load_rife_model, rife_inference_with_latents
 from huggingface_hub import hf_hub_download, snapshot_download
@@ -33,7 +33,7 @@ from huggingface_hub import hf_hub_download, snapshot_download
 import platform
 # Add imports for quantization
 from transformers import T5EncoderModel, BitsAndBytesConfig
-from diffusers import AutoencoderKLCogVideoX
+
 
 def is_bf16_supported():
     if torch.cuda.is_available():
@@ -56,10 +56,10 @@ def open_folder(folder_path):
         os.system(f'open "{folder_path}"')
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-#model_id = "THUDM/CogVideoX-5b-I2V"
-model_id = "L:\\models\CogVideoX-5b-I2V"
-#model_id_2 = "THUDM/CogVideoX-5b"
-model_id_2 = "L:\\models\CogVideoX-5b"
+model_id = "THUDM/CogVideoX-5b-I2V"
+#model_id = "L:\\models\CogVideoX-5b-I2V"
+model_id_2 = "THUDM/CogVideoX-5b"
+#model_id_2 = "L:\\models\CogVideoX-5b"
 hf_hub_download(repo_id="ai-forever/Real-ESRGAN", filename="RealESRGAN_x4.pth", local_dir="model_real_esran")
 snapshot_download(repo_id="AlexWortega/RIFE", local_dir="model_rife")
 
@@ -77,29 +77,28 @@ upscale_model = utils.load_sd_upscale("model_real_esran/RealESRGAN_x4.pth", devi
 frame_interpolation_model = load_rife_model("model_rife")
 
 def load_and_quantize_model(quantization_type, use_cpu_offload):
-    if quantization_type in ("8bit", "4bit"):
+    if quantization_type == "8bit":
         dtypeQuantize = torch.float8_e4m3fn
     else:
         dtypeQuantize = default_dtype
         
     model_id = "L:\\models\CogVideoX-5b-I2V"
-    transformer = CogVideoXTransformer3DModel.from_pretrained(model_id, subfolder="transformer").to("cpu") #, dtypeQuantize)
-    
-    #if quantization_type in ("8bit", "4bit"):        
+    transformer = CogVideoXTransformer3DModel.from_pretrained(model_id, subfolder="transformer").to(device, dtypeQuantize)
+        
     kwargs = {"device_map": device}
                         
-    if not device.type.startswith("cuda"):
+    if not device.startswith("cuda"):
         kwargs['device_map'] = {"": device}
 
     kwargs['quantization_config'] = BitsAndBytesConfig(
-        load_in_4bit= True if quantization_type == '4bit' else False,
+        load_in_4bit= False,
         load_in_8bit= True if quantization_type == '8bit' else False,
         llm_int8_enable_fp32_cpu_offload = True if quantization_type == '8bit' and use_cpu_offload else False,
         bnb_4bit_compute_dtype=default_dtype,
         bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type='nf4'
     )         
-    text_encoder = T5EncoderModel.from_pretrained(model_id, subfolder="text_encoder", low_cpu_mem_usage=True, device=device, torch_dtype=default_dtype, **kwargs)
+    text_encoder = T5EncoderModel.from_pretrained(model_id, subfolder="text_encoder", low_cpu_mem_usage=True, torch_dtype=default_dtype, **kwargs)
     
     return text_encoder, transformer
 
@@ -224,8 +223,6 @@ def infer(
             guidance_scale=guidance_scale,
             generator=torch.Generator(device="cpu").manual_seed(seed),
         ).frames
-        #pipe_video.to("cpu")
-        #del pipe_video
         torch_gc()
     elif image_input is not None:
         pipe_image = CogVideoXImageToVideoPipeline.from_pretrained(
@@ -234,31 +231,34 @@ def infer(
             #vae=vae,
             scheduler=pipe.scheduler,
             tokenizer=pipe.tokenizer,
-            text_encoder=text_encoder,
+            text_encoder=None,
             torch_dtype=default_dtype,
         ).to(device)
 
+        pipe_image.text_encoder = text_encoder
         if use_cpu_offload:
             pipe_image.enable_sequential_cpu_offload()
         if use_slicing:
             pipe_image.vae.enable_slicing()
         if use_tiling:
             pipe_image.vae.enable_tiling()
-
+        
+        torch_gc()
         image_input = Image.fromarray(image_input).resize(size=(720, 480))  # Convert to PIL
         image = load_image(image_input)
-        video_pt = pipe_image(
-            image=image,
-            prompt=prompt,
-            num_inference_steps=num_inference_steps,
-            num_videos_per_prompt=1,
-            use_dynamic_cfg=True,
-            output_type="pt",
-            guidance_scale=guidance_scale,
-            generator=torch.Generator(device="cpu").manual_seed(seed),
-        ).frames
-        #pipe_image.to("cpu")
-        #del pipe_image
+        with torch.no_grad():
+            video_pt = pipe_image(
+                image=image,
+                prompt=prompt,
+                num_inference_steps=num_inference_steps,
+                num_videos_per_prompt=1,
+                use_dynamic_cfg=True,
+                output_type="pt",
+                guidance_scale=guidance_scale,
+                generator=torch.Generator(device="cpu").manual_seed(seed),
+                dtype=default_dtype,
+                device="cpu" if use_cpu_offload else "cuda"
+            ).frames
         torch_gc()
     else:
         pipe.to(device)
@@ -283,34 +283,8 @@ def infer(
             guidance_scale=guidance_scale,
             generator=torch.Generator(device="cpu").manual_seed(seed),
         ).frames
-        #pipe.to("cpu")
         torch_gc()
     return (video_pt, seed)
-
-def convert_to_gif(video_path):
-    clip = mp.VideoFileClip(video_path)
-    clip = clip.set_fps(8)
-    clip = clip.resize(height=240)
-    gif_path = video_path.replace(".mp4", ".gif")
-    clip.write_gif(gif_path, fps=8)
-    return gif_path
-
-def delete_old_files():
-    while True:
-        now = datetime.now()
-        cutoff = now - timedelta(minutes=10)
-        directories = ["./outputs", "./gradio_tmp"]
-
-        for directory in directories:
-            for filename in os.listdir(directory):
-                file_path = os.path.join(directory, filename)
-                if os.path.isfile(file_path):
-                    file_mtime = datetime.fromtimestamp(os.path.getmtime(file_path))
-                    if file_mtime < cutoff:
-                        os.remove(file_path)
-        time.sleep(600)
-
-threading.Thread(target=delete_old_files, daemon=True).start()
 
 def get_unique_filename(base_path, extension):
     directory = os.path.dirname(base_path)
@@ -329,6 +303,23 @@ def get_unique_filename(base_path, extension):
             return new_path
         counter += 1
 
+def delete_old_files():
+    while True:
+        now = datetime.now()
+        cutoff = now - timedelta(minutes=10)
+        directories = ["./outputs", "./gradio_tmp"]
+
+        for directory in directories:
+            for filename in os.listdir(directory):
+                file_path = os.path.join(directory, filename)
+                if os.path.isfile(file_path):
+                    file_mtime = datetime.fromtimestamp(os.path.getmtime(file_path))
+                    if file_mtime < cutoff:
+                        os.remove(file_path)
+        time.sleep(600)
+
+threading.Thread(target=delete_old_files, daemon=True).start()
+
 def generate(
     prompt,
     image_input,
@@ -343,64 +334,79 @@ def generate(
     use_slicing,
     use_tiling,
     quantization_type,
+    num_generations,
     progress=gr.Progress(track_tqdm=True)
 ):
-    latents, seed = infer(
-        prompt,
-        image_input,
-        video_input,
-        video_strength,
-        num_inference_steps=num_inference_steps,
-        guidance_scale=guidance_scale,
-        seed=seed_value,
-        use_cpu_offload=use_cpu_offload,
-        use_slicing=use_slicing,
-        use_tiling=use_tiling,
-        quantization_type=quantization_type,
-        progress=progress,
-    )
+    all_video_paths = []
+    all_gif_paths = []
+    all_seeds = []
 
-    if rife_status:
-        latents = rife_inference_with_latents(frame_interpolation_model, latents)
-    if scale_status:
-        latents = utils.upscale_batch_and_concatenate(upscale_model, latents, device)
+    for i in range(num_generations):
+        latents, seed = infer(
+            prompt,
+            image_input,
+            video_input,
+            video_strength,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            seed=seed_value if i == 0 else -1,  # Use provided seed only for first generation
+            use_cpu_offload=use_cpu_offload,
+            use_slicing=use_slicing,
+            use_tiling=use_tiling,
+            quantization_type=quantization_type,
+            progress=progress,
+        )
 
+        if rife_status:
+            latents = rife_inference_with_latents(frame_interpolation_model, latents)
+        if scale_status:
+            latents = utils.upscale_batch_and_concatenate(upscale_model, latents, device)
 
-    batch_size = latents.shape[0]
-    batch_video_frames = []
-    for batch_idx in range(batch_size):
-        pt_image = latents[batch_idx]
-        pt_image = torch.stack([pt_image[i] for i in range(pt_image.shape[0])])
+        batch_size = latents.shape[0]
+        batch_video_frames = []
+        for batch_idx in range(batch_size):
+            pt_image = latents[batch_idx]
+            pt_image = torch.stack([pt_image[i] for i in range(pt_image.shape[0])])
 
-        image_np = VaeImageProcessor.pt_to_numpy(pt_image)
-        image_pil = VaeImageProcessor.numpy_to_pil(image_np)
-        batch_video_frames.append(image_pil)
+            image_np = VaeImageProcessor.pt_to_numpy(pt_image)
+            image_pil = VaeImageProcessor.numpy_to_pil(image_np)
+            batch_video_frames.append(image_pil)
 
-    # Generate a unique filename
-    base_filename = "output_" if video_input is None else os.path.splitext(os.path.basename(video_input))[0]
-    video_path = get_unique_filename(os.path.join("outputs", f"{base_filename}.mp4"), ".mp4")
-    
-    utils.save_video(batch_video_frames[0], fps=math.ceil((len(batch_video_frames[0]) - 1) / 6), output_path=video_path)
-    
-    video_update = gr.update(visible=True, value=video_path)
-    gif_path = convert_to_gif(video_path)
-    gif_update = gr.update(visible=True, value=gif_path)
-    seed_update = gr.update(visible=True, value=seed)
+        base_filename = "output_" if video_input is None else os.path.splitext(os.path.basename(video_input))[0]
+        video_path = get_unique_filename(os.path.join("outputs", f"{base_filename}.mp4"), ".mp4")
+        
+        utils.save_video(batch_video_frames[0], fps=math.ceil((len(batch_video_frames[0]) - 1) / 6), output_path=video_path)
+        
+        gif_path = get_unique_filename(video_path.replace(".mp4", ".gif"), ".gif")
+        clip = mp.VideoFileClip(video_path)
+        clip = clip.set_fps(8)
+        clip = clip.resize(height=240)
+        clip.write_gif(gif_path, fps=8)
+        
+        all_video_paths.append(video_path)
+        all_gif_paths.append(gif_path)
+        all_seeds.append(seed)
 
-    return video_path, video_update, gif_update, seed_update
+    # Return only the last generated video for display
+    video_update = gr.update(visible=True, value=all_video_paths[-1])
+    gif_update = gr.update(visible=True, value=all_gif_paths[-1])
+    seed_update = gr.update(visible=True, value=all_seeds[-1])
+
+    return all_video_paths[-1], video_update, gif_update, seed_update
 
 with gr.Blocks() as demo:
     gr.Markdown("""
            <div style="text-align: center; font-size: 22px; font-weight: bold; margin-bottom: 10px;">
                CogVideoX-5B by SECourses V1
-                              <a href="https://www.patreon.com/posts/112836177">www.patreon.com/posts/112836177</a>
+                              <a href="https://www.patreon.com/posts/112848192">www.patreon.com/posts/112836177</a>
            </div>
            <div style="text-align: center; font-size: 18px; font-weight: bold; margin-bottom: 0px;">
                - The followings fixed and perfectly works:<br>
                * Works on Windows, Runpod & Massed Compute | Super-Resolution (720 × 480 -> 2880 × 1920)<br>
-               * Frame Interpolation (8fps -> 16fps) | Properly saving all generations into outputs folder
+               * Properly saving all generations into outputs folder
            </div>
            """)
+    #Frame Interpolation (8fps -> 16fps) | 
     with gr.Row():
         with gr.Column():
             with gr.Accordion("I2V: Image Input (cannot be used simultaneously with video input)", open=True):
@@ -427,7 +433,9 @@ with gr.Blocks() as demo:
                         use_slicing = gr.Checkbox(label="Use Slicing", value=False)
                         use_tiling = gr.Checkbox(label="Use Tiling", value=False)
                     with gr.Row():
-                        quantization_type = gr.Radio(["none", "8bit", "4bit"], label="Quantization Type", value="none")
+                        quantization_type = gr.Radio(["none", "8bit"], label="Quantization Type", value="none")
+                    with gr.Row():
+                        num_generations = gr.Slider(1, 999, value=1, step=1, label="Number of Generations")
                     gr.Markdown(
                         "✨In this demo, we use [RIFE](https://github.com/hzwer/ECCV2022-RIFE) for frame interpolation and [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) for upscaling(Super-Resolution).<br>&nbsp;&nbsp;&nbsp;&nbsp;The entire process is based on open-source solutions."
                     )
@@ -439,8 +447,12 @@ with gr.Blocks() as demo:
             open_outputs_button = gr.Button("Open Results Folder")
             open_outputs_button.click(fn=lambda: open_folder("outputs"))
             gr.Markdown(
-                        """Currently on Windows we have to use CPU Offloading due to shameless OpenAI who takes 10s of billions from Microsoft not giving any support to Windows - uses less than 5 GB VRAM<br><br>I am trying to find a solution for this but because of this, it will be super slow<br><br>On Linux or WSL you can extra install torchao and use int8<br><br>Because of the Lazy coding of CogVideo team, FP8 only works on H100 and above GPUs :/ I am still searching a solution for this as well<br><br>If your GPU VRAM is below 16 GB, enable Use Slicing and Use Tiling as well (they are used after all steps done)<br><br>Without CPU offloading and without using FP8 or Int8 it uses 26 GB VRAM thus we have to use CPU offloading
+                        """Currently on Windows we have to use CPU Offloading due to shameless OpenAI who takes 10s of billions from Microsoft not giving any support to Windows<br><br>I am trying to find a solution for this but because of this, it will be super slow<br><br>On Linux or WSL you can extra install torchao and use int8<br><br>Because of the Lazy coding of CogVideo team, FP8 only works on H100 and above GPUs :/ I am still searching a solution for this as well<br><br>If your GPU VRAM is below 16 GB, enable Use Slicing and Use Tiling as well (they are used after all steps done)<br><br>Without CPU offloading and without using FP8 or Int8 it uses 26 GB VRAM thus we have to use CPU offloading
                         <br>   <br>
+                        Text to video, Video to Video not working at all yet I opened an issue for this
+                        <br><br>
+                        Frame Interpolation (8fps -> 16fps) not working properly yet I opened an issue for this
+                        <br><br>
                         You can use here to generate caption : https://poe.com/Claude-3.5-Sonnet  
                         <br>Upload image and use below prompt
                         <br>  
@@ -455,7 +467,7 @@ with gr.Blocks() as demo:
 
     generate_button.click(
         generate,
-        inputs=[prompt, image_input, video_input, strength, seed_param, num_inference_steps, guidance_scale, enable_scale, enable_rife, use_cpu_offload, use_slicing, use_tiling, quantization_type],
+        inputs=[prompt, image_input, video_input, strength, seed_param, num_inference_steps, guidance_scale, enable_scale, enable_rife, use_cpu_offload, use_slicing, use_tiling, quantization_type, num_generations],
         outputs=[video_output, download_video_button, download_gif_button, seed_text],
     )
 

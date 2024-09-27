@@ -8,3 +8,5 @@ outputs
 venv
 __pycache__/*
 pipelines/__pycache__/*
+rife/__pycache__/*
+rife/pytorch_msssim/__pycache__/*

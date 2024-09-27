@@ -19,17 +19,13 @@ from pipelines.pipeline_cogvideox import (
 from pipelines.pipeline_cogvideox_image2video import CogVideoXImageToVideoPipeline
 from pipelines.pipeline_cogvideox_video2video import CogVideoXVideoToVideoPipeline
 
-from pipelines.pipeline_cogvideox_image2video import CogVideoXImageToVideoPipeline
-from pipelines.pipeline_cogvideox_video2video import CogVideoXVideoToVideoPipeline
-
 from diffusers.utils import export_to_video, load_video, load_image
 from datetime import datetime, timedelta
 
 from diffusers.image_processor import VaeImageProcessor
 from openai import OpenAI
 import moviepy.editor as mp
-from pipelines.pipeline_common import quantize_4bit, torch_gc
-from pipelines.pipeline_common import quantize_4bit, torch_gc
+from pipelines.pipeline_common import torch_gc
 import utils
 from rife_model import load_rife_model, rife_inference_with_latents
 from huggingface_hub import hf_hub_download, snapshot_download
@@ -37,9 +33,6 @@ from huggingface_hub import hf_hub_download, snapshot_download
 import platform
 # Add imports for quantization
 from transformers import T5EncoderModel, BitsAndBytesConfig
-
-from transformers import T5EncoderModel, BitsAndBytesConfig
-
 
 def is_bf16_supported():
     if torch.cuda.is_available():
@@ -62,10 +55,11 @@ def open_folder(folder_path):
         os.system(f'open "{folder_path}"')
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-#model_id = "THUDM/CogVideoX-5b-I2V"
-model_id = "L:\\models\CogVideoX-5b-I2V"
-#model_id_2 = "THUDM/CogVideoX-5b"
-model_id_2 = "L:\\models\CogVideoX-5b"
+model_id = "THUDM/CogVideoX-5b-I2V"
+#model_id = "L:\\models\CogVideoX-5b-I2V"
+model_id_2 = "THUDM/CogVideoX-5b"
+#model_id_2 = "L:\\models\CogVideoX-5b"
+
 hf_hub_download(repo_id="ai-forever/Real-ESRGAN", filename="RealESRGAN_x4.pth", local_dir="model_real_esran")
 snapshot_download(repo_id="AlexWortega/RIFE", local_dir="model_rife")
 
@@ -87,10 +81,9 @@ def load_and_quantize_model(quantization_type, use_cpu_offload):
         dtypeQuantize = torch.float8_e4m3fn
     else:
         dtypeQuantize = default_dtype
-        
-    model_id = "L:\\models\CogVideoX-5b-I2V"
+    
     transformer = CogVideoXTransformer3DModel.from_pretrained(model_id, subfolder="transformer").to(device, dtypeQuantize)
-        
+            
     kwargs = {"device_map": device}
                         
     if not device.startswith("cuda"):
@@ -99,7 +92,7 @@ def load_and_quantize_model(quantization_type, use_cpu_offload):
     kwargs['quantization_config'] = BitsAndBytesConfig(
         load_in_4bit= False,
         load_in_8bit= True if quantization_type == '8bit' else False,
-        llm_int8_enable_fp32_cpu_offload = True if quantization_type == '8bit' and use_cpu_offload else False,
+        llm_int8_enable_fp32_cpu_offload = True if use_cpu_offload else False,
         bnb_4bit_compute_dtype=default_dtype,
         bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type='nf4'
@@ -198,17 +191,13 @@ def infer(
 
     text_encoder, transformer = load_and_quantize_model(quantization_type, use_cpu_offload)
     #vae = AutoencoderKLCogVideoX.from_pretrained("THUDM/CogVideoX-5b-I2V", subfolder="vae", torch_dtype=default_dtype)
-    text_encoder, transformer = load_and_quantize_model(quantization_type, use_cpu_offload)
-    #vae = AutoencoderKLCogVideoX.from_pretrained("THUDM/CogVideoX-5b-I2V", subfolder="vae", torch_dtype=default_dtype)
-
+   
     if video_input is not None:
         video = load_video(video_input)[:49]  # Limit to 49 frames
         pipe_video = CogVideoXVideoToVideoPipeline.from_pretrained(
-            model_id_2,
-            model_id_2,
-            transformer=transformer,
-     #       vae=vae,
-     #       vae=vae,
+            model_id_2,            
+            transformer=transformer,  
+    #       vae=vae,
             scheduler=pipe.scheduler,
             tokenizer=pipe.tokenizer,
             text_encoder=text_encoder,
@@ -233,31 +222,26 @@ def infer(
             guidance_scale=guidance_scale,
             generator=torch.Generator(device="cpu").manual_seed(seed),
         ).frames
-        torch_gc()
-        torch_gc()
+        torch_gc()        
     elif image_input is not None:
-        pipe_image = CogVideoXImageToVideoPipeline.from_pretrained(
-            model_id,
+        pipe_image = CogVideoXImageToVideoPipeline.from_pretrained(    
             model_id,
             transformer=transformer,
             #vae=vae,
             scheduler=pipe.scheduler,
-            tokenizer=pipe.tokenizer,
-            text_encoder=None,
+            tokenizer=pipe.tokenizer,            
             text_encoder=None,
             torch_dtype=default_dtype,
         )
 
         pipe_image.text_encoder = text_encoder
-        pipe_image.text_encoder = text_encoder
+        
         if use_cpu_offload:
             pipe_image.enable_model_cpu_offload()
         if use_slicing:
             pipe_image.vae.enable_slicing()
         if use_tiling:
             pipe_image.vae.enable_tiling()
-        
-        torch_gc()
         
         torch_gc()
         image_input = Image.fromarray(image_input).resize(size=(720, 480))  # Convert to PIL
@@ -313,7 +297,7 @@ def infer(
             guidance_scale=guidance_scale,
             generator=torch.Generator(device="cpu").manual_seed(seed),
         ).frames
-        torch_gc()
+        
         torch_gc()
     return (video_pt, seed)
 

@@ -56,10 +56,10 @@ def open_folder(folder_path):
         os.system(f'open "{folder_path}"')
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model_id = "THUDM/CogVideoX-5b-I2V"
-#model_id = "L:\\models\CogVideoX-5b-I2V"
-model_id_2 = "THUDM/CogVideoX-5b"
-#model_id_2 = "L:\\models\CogVideoX-5b"
+#model_id = "THUDM/CogVideoX-5b-I2V"
+model_id = "L:\\models\CogVideoX-5b-I2V"
+#model_id_2 = "THUDM/CogVideoX-5b"
+model_id_2 = "L:\\models\CogVideoX-5b"
 hf_hub_download(repo_id="ai-forever/Real-ESRGAN", filename="RealESRGAN_x4.pth", local_dir="model_real_esran")
 snapshot_download(repo_id="AlexWortega/RIFE", local_dir="model_rife")
 
@@ -233,11 +233,11 @@ def infer(
             tokenizer=pipe.tokenizer,
             text_encoder=None,
             torch_dtype=default_dtype,
-        ).to(device)
+        )
 
         pipe_image.text_encoder = text_encoder
         if use_cpu_offload:
-            pipe_image.enable_sequential_cpu_offload()
+            pipe_image.enable_model_cpu_offload()
         if use_slicing:
             pipe_image.vae.enable_slicing()
         if use_tiling:

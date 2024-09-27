@@ -386,7 +386,7 @@ with gr.Blocks() as demo:
     gr.Markdown("""
            <div style="text-align: center; font-size: 22px; font-weight: bold; margin-bottom: 10px;">
                CogVideoX-5B by SECourses V1
-                              <a href="https://www.patreon.com/posts/112836177">www.patreon.com/posts/112836177</a>
+                              <a href="https://www.patreon.com/posts/112848192">www.patreon.com/posts/112836177</a>
            </div>
            <div style="text-align: center; font-size: 18px; font-weight: bold; margin-bottom: 0px;">
                - The followings fixed and perfectly works:<br>

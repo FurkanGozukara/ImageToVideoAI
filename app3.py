@@ -11,29 +11,28 @@ import imageio_ffmpeg
 import gradio as gr
 import torch
 from PIL import Image
-from pipelines.cogvideox_transformer_3d import CogVideoXTransformer3DModel
-from pipelines.pipeline_cogvideox import (
+from diffusers import (
     CogVideoXPipeline,
-    CogVideoXDPMScheduler
+    CogVideoXDPMScheduler,
+    CogVideoXVideoToVideoPipeline,
+    CogVideoXImageToVideoPipeline,
+    CogVideoXTransformer3DModel,
 )
-from pipelines.pipeline_cogvideox_image2video import CogVideoXImageToVideoPipeline
-from pipelines.pipeline_cogvideox_video2video import CogVideoXVideoToVideoPipeline
-
 from diffusers.utils import export_to_video, load_video, load_image
 from datetime import datetime, timedelta
 
 from diffusers.image_processor import VaeImageProcessor
 from openai import OpenAI
 import moviepy.editor as mp
-from pipelines.pipeline_common import quantize_4bit, torch_gc
 import utils
 from rife_model import load_rife_model, rife_inference_with_latents
 from huggingface_hub import hf_hub_download, snapshot_download
+import gc
 
 import platform
 # Add imports for quantization
-from transformers import T5EncoderModel, BitsAndBytesConfig
-
+from transformers import T5EncoderModel
+from diffusers import AutoencoderKLCogVideoX
 
 def is_bf16_supported():
     if torch.cuda.is_available():
@@ -55,20 +54,23 @@ def open_folder(folder_path):
     elif platform.system() == "Darwin":  # macOS
         os.system(f'open "{folder_path}"')
 
+try:
+    from torchao.quantization import quantize_, int8_weight_only, int8_dynamic_activation_int8_weight
+    TORCHAO_AVAILABLE = True
+except ImportError:
+    TORCHAO_AVAILABLE = False
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model_id = "THUDM/CogVideoX-5b-I2V"
-#model_id = "L:\\models\CogVideoX-5b-I2V"
-model_id_2 = "THUDM/CogVideoX-5b"
-#model_id_2 = "L:\\models\CogVideoX-5b"
+
 hf_hub_download(repo_id="ai-forever/Real-ESRGAN", filename="RealESRGAN_x4.pth", local_dir="model_real_esran")
 snapshot_download(repo_id="AlexWortega/RIFE", local_dir="model_rife")
 
-pipe = CogVideoXPipeline.from_pretrained(model_id_2, torch_dtype=default_dtype).to("cpu")
+pipe = CogVideoXPipeline.from_pretrained("THUDM/CogVideoX-5b", torch_dtype=default_dtype).to("cpu")
 pipe.scheduler = CogVideoXDPMScheduler.from_config(pipe.scheduler.config, timestep_spacing="trailing")
 
-# i2v_transformer = CogVideoXTransformer3DModel.from_pretrained(
-#     model_id, subfolder="transformer", torch_dtype=default_dtype
-# )
+i2v_transformer = CogVideoXTransformer3DModel.from_pretrained(
+    "THUDM/CogVideoX-5b-I2V", subfolder="transformer", torch_dtype=default_dtype
+)
 
 os.makedirs("./outputs", exist_ok=True)
 os.makedirs("./gradio_tmp", exist_ok=True)
@@ -76,31 +78,30 @@ os.makedirs("./gradio_tmp", exist_ok=True)
 upscale_model = utils.load_sd_upscale("model_real_esran/RealESRGAN_x4.pth", device)
 frame_interpolation_model = load_rife_model("model_rife")
 
-def load_and_quantize_model(quantization_type, use_cpu_offload):
-    if quantization_type == "8bit":
-        dtypeQuantize = torch.float8_e4m3fn
-    else:
-        dtypeQuantize = default_dtype
-        
-    #model_id = "L:\\models\CogVideoX-5b-I2V"
-    transformer = CogVideoXTransformer3DModel.from_pretrained(model_id, subfolder="transformer").to(device, dtypeQuantize)
-        
-    kwargs = {"device_map": device}
-                        
-    if not device.startswith("cuda"):
-        kwargs['device_map'] = {"": device}
+def load_and_quantize_model(quantization_type):
+    text_encoder = T5EncoderModel.from_pretrained("THUDM/CogVideoX-5b-I2V", subfolder="text_encoder", torch_dtype=default_dtype)
+    transformer = CogVideoXTransformer3DModel.from_pretrained("THUDM/CogVideoX-5b-I2V", subfolder="transformer", torch_dtype=default_dtype)
+    vae = AutoencoderKLCogVideoX.from_pretrained("THUDM/CogVideoX-5b-I2V", subfolder="vae", torch_dtype=default_dtype)
 
-    kwargs['quantization_config'] = BitsAndBytesConfig(
-        load_in_4bit= False,
-        load_in_8bit= True if quantization_type == '8bit' else False,
-        llm_int8_enable_fp32_cpu_offload = True if quantization_type == '8bit' and use_cpu_offload else False,
-        bnb_4bit_compute_dtype=default_dtype,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type='nf4'
-    )         
-    text_encoder = T5EncoderModel.from_pretrained(model_id, subfolder="text_encoder", low_cpu_mem_usage=True, torch_dtype=default_dtype, **kwargs)
-    
-    return text_encoder, transformer
+    if quantization_type == "int8" and TORCHAO_AVAILABLE:
+        quantize_(text_encoder, int8_weight_only())
+        quantize_(transformer, int8_weight_only())
+        quantize_(vae, int8_weight_only())
+    elif quantization_type == "fp8":  # Check if GPU supports FP8
+        text_encoder = text_encoder.to(torch.float8_e4m3fn)
+        transformer = transformer.to(torch.float8_e4m3fn)
+        vae = vae.to(torch.float8_e4m3fn)
+
+
+    from transformers import BitsAndBytesConfig
+
+    nf4_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+    )
+    text_encoder = T5EncoderModel.from_pretrained("sayakpaul/cog-t5-nf4", quantization_config=nf4_config)
+
+    return text_encoder, transformer, vae
 
 def resize_if_unfit(input_video, progress=gr.Progress(track_tqdm=True)):
     width, height = get_video_dimensions(input_video)
@@ -190,15 +191,14 @@ def infer(
     if seed == -1:
         seed = random.randint(0, 2**8 - 1)
 
-    text_encoder, transformer = load_and_quantize_model(quantization_type, use_cpu_offload)
-    #vae = AutoencoderKLCogVideoX.from_pretrained("THUDM/CogVideoX-5b-I2V", subfolder="vae", torch_dtype=default_dtype)
+    text_encoder, transformer, vae = load_and_quantize_model(quantization_type)
 
     if video_input is not None:
         video = load_video(video_input)[:49]  # Limit to 49 frames
         pipe_video = CogVideoXVideoToVideoPipeline.from_pretrained(
-            model_id_2,
+            "THUDM/CogVideoX-5b",
             transformer=transformer,
-     #       vae=vae,
+            vae=vae,
             scheduler=pipe.scheduler,
             tokenizer=pipe.tokenizer,
             text_encoder=text_encoder,
@@ -223,43 +223,40 @@ def infer(
             guidance_scale=guidance_scale,
             generator=torch.Generator(device="cpu").manual_seed(seed),
         ).frames
-        torch_gc()
+        gc.collect()
+        torch.cuda.empty_cache()
     elif image_input is not None:
         pipe_image = CogVideoXImageToVideoPipeline.from_pretrained(
-            model_id,
+            "THUDM/CogVideoX-5b-I2V",
             transformer=transformer,
-            #vae=vae,
+            vae=vae,
             scheduler=pipe.scheduler,
             tokenizer=pipe.tokenizer,
-            text_encoder=None,
+            text_encoder=text_encoder,
             torch_dtype=default_dtype,
         ).to(device)
 
-        pipe_image.text_encoder = text_encoder
         if use_cpu_offload:
             pipe_image.enable_sequential_cpu_offload()
         if use_slicing:
             pipe_image.vae.enable_slicing()
         if use_tiling:
             pipe_image.vae.enable_tiling()
-        
-        torch_gc()
+
         image_input = Image.fromarray(image_input).resize(size=(720, 480))  # Convert to PIL
         image = load_image(image_input)
-        with torch.no_grad():
-            video_pt = pipe_image(
-                image=image,
-                prompt=prompt,
-                num_inference_steps=num_inference_steps,
-                num_videos_per_prompt=1,
-                use_dynamic_cfg=True,
-                output_type="pt",
-                guidance_scale=guidance_scale,
-                generator=torch.Generator(device="cpu").manual_seed(seed),
-                dtype=default_dtype,
-                device="cpu" if use_cpu_offload else "cuda"
-            ).frames
-        torch_gc()
+        video_pt = pipe_image(
+            image=image,
+            prompt=prompt,
+            num_inference_steps=num_inference_steps,
+            num_videos_per_prompt=1,
+            use_dynamic_cfg=True,
+            output_type="pt",
+            guidance_scale=guidance_scale,
+            generator=torch.Generator(device="cpu").manual_seed(seed),
+        ).frames
+        gc.collect()
+        torch.cuda.empty_cache()
     else:
         pipe.to(device)
         pipe.transformer = transformer
@@ -283,7 +280,7 @@ def infer(
             guidance_scale=guidance_scale,
             generator=torch.Generator(device="cpu").manual_seed(seed),
         ).frames
-        torch_gc()
+        gc.collect()
     return (video_pt, seed)
 
 def get_unique_filename(base_path, extension):
@@ -397,7 +394,7 @@ def generate(
 with gr.Blocks() as demo:
     gr.Markdown("""
            <div style="text-align: center; font-size: 22px; font-weight: bold; margin-bottom: 10px;">
-               CogVideoX-5B by SECourses V2
+               CogVideoX-5B by SECourses V1
                               <a href="https://www.patreon.com/posts/112848192">www.patreon.com/posts/112836177</a>
            </div>
            <div style="text-align: center; font-size: 18px; font-weight: bold; margin-bottom: 0px;">
@@ -429,11 +426,11 @@ with gr.Blocks() as demo:
                         enable_scale = gr.Checkbox(label="Super-Resolution (720 × 480 -> 2880 × 1920)", value=False)
                         enable_rife = gr.Checkbox(label="Frame Interpolation (8fps -> 16fps)", value=False)
                     with gr.Row():
-                        use_cpu_offload = gr.Checkbox(label="Use CPU Offload", value=False)
-                        use_slicing = gr.Checkbox(label="Use Slicing", value=True)
-                        use_tiling = gr.Checkbox(label="Use Tiling", value=True)
+                        use_cpu_offload = gr.Checkbox(label="Use CPU Offload", value=True)
+                        use_slicing = gr.Checkbox(label="Use Slicing", value=False)
+                        use_tiling = gr.Checkbox(label="Use Tiling", value=False)
                     with gr.Row():
-                        quantization_type = gr.Radio(["none", "8bit"], label="Quantization Type", value="8bit")
+                        quantization_type = gr.Radio(["none", "int8", "fp8"], label="Quantization Type", value="none")
                     with gr.Row():
                         num_generations = gr.Slider(1, 999, value=1, step=1, label="Number of Generations")
                     gr.Markdown(
@@ -447,12 +444,8 @@ with gr.Blocks() as demo:
             open_outputs_button = gr.Button("Open Results Folder")
             open_outputs_button.click(fn=lambda: open_folder("outputs"))
             gr.Markdown(
-                        """Current setup is set for 24 GB GPUs (Make sure VRAM usage below 3 GB)
-                        <br><br>
-                        If your GPU VRAM is below 24 GB, enable Use CPU Offload - CPU Offload only works when 8bit enabled
-                        <br><br>
-                        If your GPU VRAM is above 30 GB, disable all optimizations (Quantization Type = none, Use Slicing and Use Tiling disabled)
-                        <br><br>
+                        """Currently on Windows we have to use CPU Offloading due to shameless OpenAI who takes 10s of billions from Microsoft not giving any support to Windows<br><br>I am trying to find a solution for this but because of this, it will be super slow<br><br>On Linux or WSL you can extra install torchao and use int8<br><br>Because of the Lazy coding of CogVideo team, FP8 only works on H100 and above GPUs :/ I am still searching a solution for this as well<br><br>If your GPU VRAM is below 16 GB, enable Use Slicing and Use Tiling as well (they are used after all steps done)<br><br>Without CPU offloading and without using FP8 or Int8 it uses 26 GB VRAM thus we have to use CPU offloading
+                        <br>   <br>
                         Text to video, Video to Video not working at all yet I opened an issue for this
                         <br><br>
                         Frame Interpolation (8fps -> 16fps) not working properly yet I opened an issue for this

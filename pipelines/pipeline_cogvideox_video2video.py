@@ -22,7 +22,7 @@ from PIL import Image
 from transformers import T5EncoderModel, T5Tokenizer
 
 from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
-from diffusers.loaders import CogVideoXLoraLoaderMixin
+
 from pipelines.cogvideox_transformer_3d import CogVideoXTransformer3DModel
 from diffusers.models import AutoencoderKLCogVideoX
 from pipelines.embeddings import get_3d_rotary_pos_embed
@@ -160,7 +160,7 @@ def retrieve_latents(
         raise AttributeError("Could not access latents of provided encoder_output")
 
 
-class CogVideoXVideoToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin):
+class CogVideoXVideoToVideoPipeline(DiffusionPipeline):
     r"""
     Pipeline for video-to-video generation using CogVideoX.
 
